@@ -1,5 +1,9 @@
 import Foundation
 
+enum DecreeError: Error {
+    case commandFailed(command: String)
+}
+
 struct DiffResult {
     var toInstall: [String: [String]] = [:]
     var toRemove: [String: [String]] = [:]
@@ -14,7 +18,7 @@ struct ExecutedAction {
 
 struct Executor {
 
-    // MARK: - Switch: apply diff safely
+    // MARK: - Switch
     static func switchPackages(diff: DiffResult, specs: [String: PackageSpec]) throws {
         var journal: [ExecutedAction] = []
 
@@ -35,7 +39,7 @@ struct Executor {
                 for pkg in pkgs {
                     let command = spec.commands.install.replacingOccurrences(of: "{{package}}", with: pkg)
                     print("→ \(command)")
-                    guard try runShell(command) == 0 else { throw NSError() }
+                    guard try runShell(command) == 0 else { throw DecreeError.commandFailed(command: command) }
                     journal.append(.init(manager: manager, package: pkg, action: "install"))
                 }
             }
@@ -45,7 +49,7 @@ struct Executor {
                 for pkg in pkgs {
                     let command = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: pkg)
                     print("→ \(command)")
-                    guard try runShell(command) == 0 else { throw NSError() }
+                    guard try runShell(command) == 0 else { throw DecreeError.commandFailed(command: command) }
                     journal.append(.init(manager: manager, package: pkg, action: "remove"))
                 }
             }
@@ -69,11 +73,11 @@ struct Executor {
         for (_, spec) in specs {
             guard let cmd = spec.commands.upgrade_all else { continue }
             print("→ Running autoUpgrade: \(cmd)")
-            guard try runShell(cmd) == 0 else { throw NSError() }
+            guard try runShell(cmd) == 0 else { throw DecreeError.commandFailed(command: cmd) }
         }
     }
 
-    // MARK: - Shell helper
+    // MARK: - Run shell
     @discardableResult
     static func runShell(_ command: String) throws -> Int32 {
         let process = Process()
@@ -100,7 +104,7 @@ struct Executor {
     }
 }
 
-// Compute diff helper
+// MARK: - Diff computation
 func computeDiff(current: Config, desired: Config) -> DiffResult {
     var result = DiffResult()
     let managers = Set(current.packages.keys).union(desired.packages.keys)
