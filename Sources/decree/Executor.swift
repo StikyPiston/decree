@@ -1,122 +1,107 @@
 import Foundation
 
-enum DecreeError: Error {
-    case commandFailed(command: String)
-}
-
-struct DiffResult {
-    var toInstall: [String: [String]] = [:]
-    var toRemove: [String: [String]] = [:]
-    var isEmpty: Bool { toInstall.isEmpty && toRemove.isEmpty }
-}
-
-struct ExecutedAction {
-    let manager: String
-    let package: String
-    let action: String // "install" or "remove"
-}
-
 struct Executor {
 
-    // MARK: - Switch
-    static func switchPackages(diff: DiffResult, specs: [String: PackageSpec]) throws {
-        var journal: [ExecutedAction] = []
+    /// Execute a shell command and return its exit code
+    static func runShell(_ command: String) throws -> Int32 {
+        let task = Process()
+        let pipe = Pipe()
 
-        func rollback() {
-            print("Rolling back…")
-            for action in journal.reversed() {
-                guard let spec = specs[action.manager] else { continue }
-                let command = action.action == "install"
-                    ? spec.commands.remove.replacingOccurrences(of: "{{package}}", with: action.package)
-                    : spec.commands.install.replacingOccurrences(of: "{{package}}", with: action.package)
-                _ = try? runShell(command)
+        task.standardOutput = pipe
+        task.standardError = pipe
+        task.arguments = ["-c", command]
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+
+        try task.run()
+        task.waitUntilExit()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+            print(output)
+        }
+
+        return task.terminationStatus
+    }
+
+    /// Install and remove packages according to a diff
+    static func switchPackages(diff: DiffResult, specs: [String: PackageSpec]) throws {
+        var journal: [PackageAction] = []
+
+        // Remove packages first
+        for (manager, packages) in diff.toRemove {
+            guard let spec = specs[manager] else { continue }
+            for pkg in packages {
+                let command = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: pkg)
+                print("→ \(command)")
+                guard try runShell(command) == 0 else {
+                    print("⚠ Failed to remove \(pkg) from \(manager), rolling back...")
+                    try rollbackJournal(journal, specs: specs)
+                    throw ExecutorError.failed("Failed to remove \(pkg) from \(manager)")
+                }
+                journal.append(.init(manager: manager, package: pkg, action: "remove"))
             }
         }
 
-        do {
-            for (manager, pkgs) in diff.toInstall {
-                guard let spec = specs[manager] else { continue }
-                for pkg in pkgs {
-                    let command = spec.commands.install.replacingOccurrences(of: "{{package}}", with: pkg)
-                    print("→ \(command)")
-                    guard try runShell(command) == 0 else { throw DecreeError.commandFailed(command: command) }
-                    journal.append(.init(manager: manager, package: pkg, action: "install"))
+        // Install packages
+        for (manager, packages) in diff.toInstall {
+            guard let spec = specs[manager] else { continue }
+            for pkg in packages {
+                let command = spec.commands.install.replacingOccurrences(of: "{{package}}", with: pkg)
+                print("→ \(command)")
+                guard try runShell(command) == 0 else {
+                    print("⚠ Failed to install \(pkg) on \(manager), rolling back...")
+                    try rollbackJournal(journal, specs: specs)
+                    throw ExecutorError.failed("Failed to install \(pkg) on \(manager)")
                 }
+                journal.append(.init(manager: manager, package: pkg, action: "install"))
             }
-
-            for (manager, pkgs) in diff.toRemove {
-                guard let spec = specs[manager] else { continue }
-                for pkg in pkgs {
-                    let command = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: pkg)
-                    print("→ \(command)")
-                    guard try runShell(command) == 0 else { throw DecreeError.commandFailed(command: command) }
-                    journal.append(.init(manager: manager, package: pkg, action: "remove"))
-                }
-            }
-        } catch {
-            rollback()
-            throw error
         }
     }
 
-    // MARK: - Rollback
-    static func rollback(to previousConfig: Config, currentConfig: Config, specs: [String: PackageSpec]) throws {
-        let diff = computeDiff(current: currentConfig, desired: previousConfig)
-        print("Rollback plan:")
-        for (manager, pkgs) in diff.toInstall { for pkg in pkgs { print("  + \(manager): \(pkg)") } }
-        for (manager, pkgs) in diff.toRemove { for pkg in pkgs { print("  - \(manager): \(pkg)") } }
+    /// Rollback packages based on a previous config
+    static func rollback(to targetConfig: Config, currentConfig: Config, specs: [String: PackageSpec]) throws {
+        let diff = computeDiff(current: currentConfig, desired: targetConfig)
         try switchPackages(diff: diff, specs: specs)
     }
 
-    // MARK: - AutoUpgrade
+    /// Run all package managers' upgrade commands
     static func autoUpgrade(specs: [String: PackageSpec]) throws {
-        for (_, spec) in specs {
+        for (manager, spec) in specs {
             guard let cmd = spec.commands.upgrade_all else { continue }
-            print("→ Running autoUpgrade: \(cmd)")
-            guard try runShell(cmd) == 0 else { throw DecreeError.commandFailed(command: cmd) }
+            print("→ Running autoUpgrade for \(manager): \(cmd)")
+            guard try runShell(cmd) == 0 else {
+                throw ExecutorError.failed("Failed autoUpgrade for \(manager)")
+            }
         }
     }
 
-    // MARK: - Run shell
-    @discardableResult
-    static func runShell(_ command: String) throws -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", command]
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-        if process.terminationStatus != 0 {
-            print(stdout)
-            print(stderr)
+    /// Rollback previously executed actions in case of failure
+    private static func rollbackJournal(_ journal: [PackageAction], specs: [String: PackageSpec]) throws {
+        for action in journal.reversed() {
+            guard let spec = specs[action.manager] else { continue }
+            let cmd: String
+            switch action.action {
+            case "install":
+                cmd = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: action.package)
+            case "remove":
+                cmd = spec.commands.install.replacingOccurrences(of: "{{package}}", with: action.package)
+            default:
+                continue
+            }
+            print("↩ Rolling back: \(cmd)")
+            _ = try runShell(cmd)
         }
-
-        return process.terminationStatus
-    }
-}
-
-// MARK: - Diff computation
-func computeDiff(current: Config, desired: Config) -> DiffResult {
-    var result = DiffResult()
-    let managers = Set(current.packages.keys).union(desired.packages.keys)
-
-    for manager in managers {
-        let currentPkgs = Set(current.packages[manager] ?? [])
-        let desiredPkgs = Set(desired.packages[manager] ?? [])
-        let install = desiredPkgs.subtracting(currentPkgs)
-        let remove = currentPkgs.subtracting(desiredPkgs)
-        if !install.isEmpty { result.toInstall[manager] = Array(install).sorted() }
-        if !remove.isEmpty { result.toRemove[manager] = Array(remove).sorted() }
     }
 
-    return result
+    // MARK: - Errors
+    enum ExecutorError: Error {
+        case failed(String)
+    }
+
+    /// Represents an action performed in a transaction
+    struct PackageAction {
+        let manager: String
+        let package: String
+        let action: String // "install" or "remove"
+    }
 }
