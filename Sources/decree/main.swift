@@ -2,8 +2,31 @@ import Foundation
 import ArgumentParser
 import Yams
 
+// MARK: - Helpers to load configs/specs
+func loadConfig() throws -> Config {
+    let path = NSString(string: "~/.config/decree/config.yaml").expandingTildeInPath
+    let yaml = try String(contentsOfFile: path, encoding: .utf8)
+    return try YAMLDecoder().decode(Config.self, from: yaml)
+}
+
+func loadSpecs() throws -> [String: PackageSpec] {
+    let dir = NSString(string: "~/.config/decree/spec").expandingTildeInPath
+    let files = try FileManager.default.contentsOfDirectory(atPath: dir)
+        .filter { $0.hasSuffix(".yaml") }
+
+    var specs: [String: PackageSpec] = [:]
+    for file in files {
+        let path = "\(dir)/\(file)"
+        let yaml = try String(contentsOfFile: path, encoding: .utf8)
+        let spec = try YAMLDecoder().decode(PackageSpec.self, from: yaml)
+        specs[spec.name] = spec
+    }
+    return specs
+}
+
+// MARK: - Main CLI
 struct Decree: ParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "decree",
         abstract: "Declarative package management CLI",
         subcommands: [Switch.self, Rollback.self, Upgrade.self],
@@ -61,14 +84,14 @@ extension Decree {
 
             try Executor.rollback(to: targetConfig, currentConfig: currentConfig, specs: specs)
 
-            // Save new generation after rollback
+            let diff = computeDiff(current: currentConfig, desired: targetConfig)
             let nextGen = Generation.nextGenerationNumber()
             try Generation.saveGeneration(config: targetConfig, number: nextGen)
             try Generation.writeCommit(
                 from: generation,
                 number: nextGen,
-                added: computeDiff(current: currentConfig, desired: targetConfig).toInstall,
-                removed: computeDiff(current: currentConfig, desired: targetConfig).toRemove,
+                added: diff.toInstall,
+                removed: diff.toRemove,
                 autoUpgrade: false,
                 upgradeRan: false
             )
