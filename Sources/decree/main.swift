@@ -6,7 +6,7 @@ import Yams
 struct Decree: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "decree",
-        abstract: "Declarative package management CLI",
+        abstract: "Declaratively manage your *nix system",
         subcommands: [Switch.self, Rollback.self, Upgrade.self],
     )
 }
@@ -16,20 +16,18 @@ struct Switch: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Apply the desired configuration.")
 
     func run() throws {
-        print("[CLI] Running switch...") // Debug: confirm CLI works
-
         let currentConfig = try Generation.loadCurrentConfig()
         let desiredConfig = try loadConfig()
         let specs = try loadSpecs()
 
         let diff = computeDiff(current: currentConfig, desired: desiredConfig)
 
-        print("Plan:")
+        print(" Plan:")
         for (manager, pkgs) in diff.toInstall { for pkg in pkgs { print("  + \(manager): \(pkg)") } }
         for (manager, pkgs) in diff.toRemove { for pkg in pkgs { print("  - \(manager): \(pkg)") } }
 
         if diff.isEmpty {
-            print("Nothing to do!")
+            print(" Nothing to do!")
             return
         }
 
@@ -60,8 +58,6 @@ struct Rollback: ParsableCommand {
     var generation: Int
 
     func run() throws {
-        print("[CLI] Running rollback to generation \(generation)...") // Debug
-
         let currentConfig = try Generation.loadCurrentConfig()
         let targetConfig = try Generation.loadPrevious(number: generation)
         let specs = try loadSpecs()
@@ -87,7 +83,6 @@ struct Upgrade: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Upgrade all package managers.")
 
     func run() throws {
-        print("[CLI] Running upgrade...") // Debug
         let specs = try loadSpecs()
         try Executor.autoUpgrade(specs: specs)
     }

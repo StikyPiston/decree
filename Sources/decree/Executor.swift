@@ -32,9 +32,9 @@ struct Executor {
             guard let spec = specs[manager] else { continue }
             for pkg in packages {
                 let command = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: pkg)
-                print("→ \(command)")
+                print(" \(command)")
                 guard try runShell(command) == 0 else {
-                    print("⚠ Failed to remove \(pkg) from \(manager), rolling back...")
+                    print(" Failed to remove \(pkg) from \(manager), rolling back...")
                     try rollbackJournal(journal, specs: specs)
                     throw ExecutorError.failed("Failed to remove \(pkg) from \(manager)")
                 }
@@ -47,9 +47,9 @@ struct Executor {
             guard let spec = specs[manager] else { continue }
             for pkg in packages {
                 let command = spec.commands.install.replacingOccurrences(of: "{{package}}", with: pkg)
-                print("→ \(command)")
+                print(" \(command)")
                 guard try runShell(command) == 0 else {
-                    print("⚠ Failed to install \(pkg) on \(manager), rolling back...")
+                    print(" Failed to install \(pkg) on \(manager), rolling back...")
                     try rollbackJournal(journal, specs: specs)
                     throw ExecutorError.failed("Failed to install \(pkg) on \(manager)")
                 }
@@ -68,7 +68,7 @@ struct Executor {
     static func autoUpgrade(specs: [String: PackageSpec]) throws {
         for (manager, spec) in specs {
             guard let cmd = spec.commands.upgrade_all else { continue }
-            print("→ Running autoUpgrade for \(manager): \(cmd)")
+            print("󰚰 Running autoUpgrade for \(manager): \(cmd)")
             guard try runShell(cmd) == 0 else {
                 throw ExecutorError.failed("Failed autoUpgrade for \(manager)")
             }
@@ -88,7 +88,7 @@ struct Executor {
             default:
                 continue
             }
-            print("↩ Rolling back: \(cmd)")
+            print(" Rolling back: \(cmd)")
             _ = try runShell(cmd)
         }
     }
