@@ -22,12 +22,12 @@ struct Switch: ParsableCommand {
 
         let diff = computeDiff(current: currentConfig, desired: desiredConfig)
 
-        print(" Plan:")
-        for (manager, pkgs) in diff.toInstall { for pkg in pkgs { print("  + \(manager): \(pkg)") } }
-        for (manager, pkgs) in diff.toRemove { for pkg in pkgs { print("  - \(manager): \(pkg)") } }
+        print(colored(" Plan:", color: .blue))
+        for (manager, pkgs) in diff.toInstall { for pkg in pkgs { print(colored("  + \(manager): \(pkg)", color: .green)) } }
+        for (manager, pkgs) in diff.toRemove  { for pkg in pkgs { print(colored("  - \(manager): \(pkg)", color: .red)) } }
 
         if diff.isEmpty {
-            print(" Nothing to do!")
+            print(colored(" Nothing to do!", color: .green))
             return
         }
 

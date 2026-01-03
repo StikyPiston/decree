@@ -32,11 +32,11 @@ struct Executor {
             guard let spec = specs[manager] else { continue }
             for pkg in packages {
                 let command = spec.commands.remove.replacingOccurrences(of: "{{package}}", with: pkg)
-                print(" \(command)")
+                print(colored(" \(command)", color: .blue))
                 guard try runShell(command) == 0 else {
-                    print(" Failed to remove \(pkg) from \(manager), rolling back...")
+                    print(colored(" Failed to remove \(pkg) from \(manager), rolling back...", color: .red))
                     try rollbackJournal(journal, specs: specs)
-                    throw ExecutorError.failed("Failed to remove \(pkg) from \(manager)")
+                    throw ExecutorError.failed(colored(" Failed to remove \(pkg) from \(manager)", color: .red))
                 }
                 journal.append(.init(manager: manager, package: pkg, action: "remove"))
             }
@@ -47,11 +47,11 @@ struct Executor {
             guard let spec = specs[manager] else { continue }
             for pkg in packages {
                 let command = spec.commands.install.replacingOccurrences(of: "{{package}}", with: pkg)
-                print(" \(command)")
+                print(colored(" \(command)", color: .blue))
                 guard try runShell(command) == 0 else {
-                    print(" Failed to install \(pkg) on \(manager), rolling back...")
+                    print(colored(" Failed to install \(pkg) on \(manager), rolling back...", color: .red))
                     try rollbackJournal(journal, specs: specs)
-                    throw ExecutorError.failed("Failed to install \(pkg) on \(manager)")
+                    throw ExecutorError.failed(colored(" Failed to install \(pkg) with \(manager)", color: .red))
                 }
                 journal.append(.init(manager: manager, package: pkg, action: "install"))
             }
@@ -68,9 +68,9 @@ struct Executor {
     static func autoUpgrade(specs: [String: PackageSpec]) throws {
         for (manager, spec) in specs {
             guard let cmd = spec.commands.upgrade_all else { continue }
-            print("󰚰 Running autoUpgrade for \(manager): \(cmd)")
+            print(colored("󰚰 Running autoUpgrade for \(manager): \(cmd)", color: .blue))
             guard try runShell(cmd) == 0 else {
-                throw ExecutorError.failed("Failed autoUpgrade for \(manager)")
+                throw ExecutorError.failed(colored(" Failed autoUpgrade for \(manager)", color: .red))
             }
         }
     }
@@ -88,7 +88,7 @@ struct Executor {
             default:
                 continue
             }
-            print(" Rolling back: \(cmd)")
+            print(colored(" Rolling back: \(cmd)", color: .blue))
             _ = try runShell(cmd)
         }
     }
