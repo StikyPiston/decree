@@ -1,4 +1,5 @@
 import Foundation
+import Yams
 
 func saveGeneration(config: Config, number: Int) throws {
     let dir = NSString(string: "~/.prev-decrees").expandingTildeInPath
