@@ -6,5 +6,5 @@ struct Config: Codable {
     }
 
     var settings: Settings?
-    var packages: [String: [String]]
+    var packages: [String: [String]] // managerName → [packageName]
 }

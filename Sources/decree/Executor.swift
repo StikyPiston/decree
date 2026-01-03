@@ -1,13 +1,20 @@
 import Foundation
 
+struct DiffResult {
+    var toInstall: [String: [String]] = [:]
+    var toRemove: [String: [String]] = [:]
+    var isEmpty: Bool { toInstall.isEmpty && toRemove.isEmpty }
+}
+
 struct ExecutedAction {
     let manager: String
     let package: String
-    let action: String
+    let action: String // "install" or "remove"
 }
 
 struct Executor {
 
+    // MARK: - Switch: apply diff safely
     static func switchPackages(diff: DiffResult, specs: [String: PackageSpec]) throws {
         var journal: [ExecutedAction] = []
 
@@ -48,6 +55,7 @@ struct Executor {
         }
     }
 
+    // MARK: - Rollback
     static func rollback(to previousConfig: Config, currentConfig: Config, specs: [String: PackageSpec]) throws {
         let diff = computeDiff(current: currentConfig, desired: previousConfig)
         print("Rollback plan:")
@@ -56,14 +64,16 @@ struct Executor {
         try switchPackages(diff: diff, specs: specs)
     }
 
+    // MARK: - AutoUpgrade
     static func autoUpgrade(specs: [String: PackageSpec]) throws {
         for (_, spec) in specs {
-            guard let cmd: String? = spec.commands.upgrade else { continue }
+            guard let cmd = spec.commands.upgrade_all else { continue }
             print("→ Running autoUpgrade: \(cmd)")
             guard try runShell(cmd) == 0 else { throw NSError() }
         }
     }
 
+    // MARK: - Shell helper
     @discardableResult
     static func runShell(_ command: String) throws -> Int32 {
         let process = Process()
@@ -88,4 +98,21 @@ struct Executor {
 
         return process.terminationStatus
     }
+}
+
+// Compute diff helper
+func computeDiff(current: Config, desired: Config) -> DiffResult {
+    var result = DiffResult()
+    let managers = Set(current.packages.keys).union(desired.packages.keys)
+
+    for manager in managers {
+        let currentPkgs = Set(current.packages[manager] ?? [])
+        let desiredPkgs = Set(desired.packages[manager] ?? [])
+        let install = desiredPkgs.subtracting(currentPkgs)
+        let remove = currentPkgs.subtracting(desiredPkgs)
+        if !install.isEmpty { result.toInstall[manager] = Array(install).sorted() }
+        if !remove.isEmpty { result.toRemove[manager] = Array(remove).sorted() }
+    }
+
+    return result
 }
