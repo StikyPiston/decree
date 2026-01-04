@@ -1,0 +1,237 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "yaml"
+require "fileutils"
+require "optparse"
+
+CONFIG_DIR = File.expand_path("~/.config/decree")
+SPEC_DIR   = File.join(CONFIG_DIR, "spec")
+PREV_DIR   = File.expand_path("~/.prev-decrees")
+CURRENT_SYMLINK = File.join(PREV_DIR, "current.yaml")
+
+# ----------------------------
+# Utility helpers
+# ----------------------------
+
+def color(code, str)
+  "\e[#{code}m#{str}\e[0m"
+end
+
+def red(str)    = color(31, str)
+def green(str)  = color(32, str)
+def yellow(str) = color(33, str)
+def blue(str)   = color(34, str)
+def gray(str)   = color(90, str)
+def bold(str)   = color(1, str)
+
+
+def die(msg)
+  warn red "[ERR] #{msg}"
+  exit 1
+end
+
+def info(msg)
+  puts blue "[INF] #{msg}"
+end
+
+def ok(msg)
+  puts green "[OK] #{msg}"
+end
+
+def run!(cmd)
+  puts blue "[RUN] #{cmd}"
+  system(cmd) || raise("Command failed")
+end
+
+# ----------------------------
+# Config / Spec loading
+# ----------------------------
+
+def load_config(path = File.join(CONFIG_DIR, "config.yaml"))
+  YAML.load_file(path)
+rescue Errno::ENOENT
+  die "Missing config.yaml"
+end
+
+def load_specs
+  specs = {}
+  Dir.glob(File.join(SPEC_DIR, "*.yaml")).each do |file|
+    name = File.basename(file, ".yaml")
+    specs[name] = YAML.load_file(file)
+  end
+  specs
+end
+
+# ----------------------------
+# Generations
+# ----------------------------
+
+def ensure_prev_dir
+  FileUtils.mkdir_p(PREV_DIR)
+end
+
+def current_generation_config
+  return { "packages" => {} } unless File.symlink?(CURRENT_SYMLINK)
+  YAML.load_file(File.realpath(CURRENT_SYMLINK))
+end
+
+def next_generation_number
+  ensure_prev_dir
+  nums = Dir.glob(File.join(PREV_DIR, "*.yaml"))
+            .map { |f| File.basename(f, ".yaml").to_i }
+  nums.empty? ? 1 : nums.max + 1
+end
+
+def save_generation(config, number, commit)
+  ensure_prev_dir
+  gen_file = File.join(PREV_DIR, "#{number}.yaml")
+  commit_file = File.join(PREV_DIR, "#{number}.commit")
+
+  File.write(gen_file, YAML.dump(config))
+  File.write(commit_file, YAML.dump(commit))
+
+  FileUtils.rm_f(CURRENT_SYMLINK)
+  FileUtils.ln_sf(gen_file, CURRENT_SYMLINK)
+end
+
+# ----------------------------
+# Diff logic
+# ----------------------------
+
+def compute_diff(current, desired)
+  result = { install: [], remove: [] }
+
+  (current.keys | desired.keys).each do |mgr|
+    cur = Array(current[mgr])
+    des = Array(desired[mgr])
+
+    (des - cur).each { |p| result[:install] << [mgr, p] }
+    (cur - des).each { |p| result[:remove]  << [mgr, p] }
+  end
+
+  result
+end
+
+# ----------------------------
+# Executor
+# ----------------------------
+
+def execute_diff(diff, specs)
+  journal = []
+
+  begin
+    diff[:install].each do |mgr, pkg|
+      spec = specs[mgr] or die "Missing spec for #{mgr}"
+      cmd = spec.dig("commands", "install")
+      die "No install command for #{mgr}" unless cmd
+      run!(cmd.gsub("{{package}}", pkg))
+      journal << [:install, mgr, pkg]
+    end
+
+    diff[:remove].each do |mgr, pkg|
+      spec = specs[mgr] or die "Missing spec for #{mgr}"
+      cmd = spec.dig("commands", "remove")
+      die "No remove command for #{mgr}" unless cmd
+      run!(cmd.gsub("{{package}}", pkg))
+      journal << [:remove, mgr, pkg]
+    end
+  rescue => e
+    warn red "⚠ Failure, rolling back..."
+    journal.reverse_each do |action, mgr, pkg|
+      spec = specs[mgr]
+      undo = action == :install ? "remove" : "install"
+      cmd = spec.dig("commands", undo)
+      system(cmd.gsub("{{package}}", pkg)) if cmd
+    end
+    raise e
+  end
+end
+
+def auto_upgrade(specs)
+  specs.each do |mgr, spec|
+    cmd = spec.dig("commands", "upgrade_all")
+    next unless cmd
+    info "Auto-upgrading #{mgr}"
+    run!(cmd)
+  end
+end
+
+# ----------------------------
+# Commands
+# ----------------------------
+
+cmd = ARGV.shift || "help"
+
+case cmd
+when "switch"
+  config = load_config
+  specs = load_specs
+
+  current = current_generation_config["packages"] || {}
+  desired = config["packages"] || {}
+
+  diff = compute_diff(current, desired)
+
+  puts blue "Plan:"
+  diff[:install].each { |m,p| puts green "  + #{m}: #{p}" }
+  diff[:remove].each  { |m,p| puts red "  - #{m}: #{p}" }
+
+  exit ok("Nothing to do") if diff.values.all?(&:empty?)
+
+  execute_diff(diff, specs)
+
+  if config.dig("settings", "autoUpgrade")
+    auto_upgrade(specs)
+  end
+
+  gen = next_generation_number
+  save_generation(
+    config,
+    gen,
+    {
+      from: File.symlink?(CURRENT_SYMLINK) ? gen - 1 : nil,
+      install: diff[:install],
+      remove: diff[:remove]
+    }
+  )
+
+  ok "Switched to generation #{gen}"
+
+when "rollback"
+  target = ARGV.shift or die "Usage: decree rollback <generation>"
+  gen_file = File.join(PREV_DIR, "#{target}.yaml")
+  die "No such generation" unless File.exist?(gen_file)
+
+  specs = load_specs
+  current = current_generation_config["packages"] || {}
+  desired = YAML.load_file(gen_file)["packages"] || {}
+
+  diff = compute_diff(current, desired)
+
+  execute_diff(diff, specs)
+
+  gen = next_generation_number
+  save_generation(
+    { "packages" => desired },
+    gen,
+    { rollback_to: target }
+  )
+
+  ok "Rolled back to generation #{target} (new gen #{gen})"
+
+when "upgrade"
+  specs = load_specs
+  auto_upgrade(specs)
+  ok "Upgrade complete"
+
+else
+  puts <<~HELP
+    decree — declarative package management
+
+    Commands:
+      switch              Apply config.yaml
+      rollback <gen>      Roll back to a generation
+      upgrade             Run upgrade_all on all specs
+  HELP
+end
