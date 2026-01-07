@@ -26,9 +26,6 @@ commands:
   install: "brew install {{package}}"
   remove: "brew remove {{package}}"
   upgrade_all: "brew upgrade"
-
-detection:
-  command: "brew --version"
 ```
 
 That `{{package}}` notation is replaced with the actual package to be installed/removed when decree runs.
